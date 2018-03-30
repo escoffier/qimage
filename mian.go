@@ -4,6 +4,7 @@ import (
 	"crypto/md5"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html/template"
 	"io"
@@ -68,6 +69,60 @@ func adduser(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 	fmt.Fprintf(w, "you are add user %s", uid)
 }
 
+func savaImage(buf []byte, MD5String string) {
+
+	//buf, err := ioutil.ReadAll(file)
+
+	//hash := md5.New()
+	//Copy the file in the hash interface and check for any error
+	// if _, err := io.Copy(hash, file); err != nil {
+	// 	//return returnMD5String, err
+	// 	fmt.Printf("copy to hash err: %v", err)
+	// }
+	//hash.Write(buf)
+	//hashInBytes := hash.Sum(nil)[:16]
+	//MD5String := hex.EncodeToString(hashInBytes)
+	//fmt.Println(MD5String)
+
+	//leveldir := md5[:6]
+	//level2dir := md5[3:6]
+	//hex.Encode()
+	//str := hex.EncodeToString(leveldir)
+
+	//buf := bytes.NewReader(level1dir)
+	l1int, err := strconv.ParseUint(MD5String[0:3], 16, 32)
+	if err != nil {
+		fmt.Println(err)
+	}
+	l1int = l1int / 4
+	le1str := strconv.FormatUint(l1int, 10)
+
+	l2int, err := strconv.ParseUint(MD5String[3:6], 16, 32)
+	if err != nil {
+		fmt.Println(err)
+	}
+	l2int = l2int / 4
+	l2str := strconv.FormatUint(l2int, 10)
+
+	saveName := "image/" + le1str + "/" + l2str + "/" + MD5String + "/"
+	fmt.Println(saveName)
+
+	os.MkdirAll(saveName, 0777)
+
+	f, err := os.OpenFile(saveName+"0_0", os.O_WRONLY|os.O_CREATE, 0666) // 此处假设当前目录下已存在test目录
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	defer f.Close()
+
+	//var buff bytes.Buffer
+	//fileSize, err := buff.ReadFrom(file)
+	ssdbclient.Set(MD5String, buf, 0)
+	f.Write(buf)
+	//io.w(f, file)
+
+}
 func uploadpost(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 	r.ParseMultipartForm(32 << 20)
 	file, handler, err := r.FormFile("uploadfile")
@@ -77,14 +132,13 @@ func uploadpost(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 	}
 	defer file.Close()
 
-	f, err := os.OpenFile("./test/"+handler.Filename, os.O_WRONLY|os.O_CREATE, 0666) // 此处假设当前目录下已存在test目录
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
-	defer f.Close()
+	// f, err := os.OpenFile("./test/"+handler.Filename, os.O_WRONLY|os.O_CREATE, 0666) // 此处假设当前目录下已存在test目录
+	// if err != nil {
+	// 	fmt.Println(err)
+	// 	return
+	// }
 
-	//var buff bytes.Buffer
+	// defer f.Close()
 	//fileSize, err := buff.ReadFrom(file)
 	buf, err := ioutil.ReadAll(file)
 
@@ -98,7 +152,9 @@ func uploadpost(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 	hashInBytes := hash.Sum(nil)[:16]
 	MD5String := hex.EncodeToString(hashInBytes)
 	fmt.Println(MD5String)
-	ssdbclient.Set(MD5String, buf, 0)
+	savaImage(buf, MD5String)
+
+	//ssdbclient.Set(MD5String, buf, 0)
 	w.Header().Set("Content-type", "application/json;charset=utf-8")
 	fileinfo := ImageInfo{handler.Filename, MD5String}
 	b, err := json.Marshal(fileinfo)
@@ -110,10 +166,10 @@ func uploadpost(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 	fmt.Println(string(b))
 	w.Write(b)
 
-	if _, err = file.Seek(0, 0); err != nil {
-		fmt.Println(err)
-	}
-	io.Copy(f, file)
+	//if _, err = file.Seek(0, 0); err != nil {
+	//	fmt.Println(err)
+	//}
+	//io.Copy(f, file)
 }
 
 func uploadget(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
@@ -126,16 +182,53 @@ func uploadget(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 	t.Execute(w, token)
 }
 
-func downloadimage(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
-	id := ps.ByName("name")
-	fmt.Println(id)
+func getImagePath(MD5String string) (string, error) {
 
-	data, err := ioutil.ReadFile(string("test/11.jpg"))
-
+	if len(MD5String) != 32 {
+		err := errors.New("Invalid md5: " + MD5String)
+		return string(""), err
+	}
+	l1int, err := strconv.ParseUint(MD5String[0:3], 16, 32)
 	if err != nil {
-		fmt.Printf("Error with id %s: %v", id, err)
+		fmt.Println(err)
+		return string(""), err
+	}
+	l1int = l1int / 4
+	le1str := strconv.FormatUint(l1int, 10)
+
+	l2int, err := strconv.ParseUint(MD5String[3:6], 16, 32)
+	if err != nil {
+		fmt.Println(err)
+		return string(""), err
+	}
+	l2int = l2int / 4
+	l2str := strconv.FormatUint(l2int, 10)
+
+	dirpath := "image/" + le1str + "/" + l2str + "/" + MD5String + "/0_0"
+	return dirpath, nil
+}
+func downloadimage(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
+	md5str := ps.ByName("name")
+	fmt.Println(md5str)
+
+	p := r.URL.Query().Get("p")
+	fmt.Println("p=" + p)
+
+	path, err := getImagePath(md5str)
+	if err != nil {
+		fmt.Printf("get Image path failed: %v", err)
 		w.WriteHeader(404)
 		w.Write([]byte("404"))
+		return
+	}
+	fmt.Println("Image path: " + path)
+	data, err := ioutil.ReadFile(path)
+
+	if err != nil {
+		fmt.Printf("Error with id %s: %v", md5str, err)
+		w.WriteHeader(404)
+		w.Write([]byte("404"))
+		return
 	}
 
 	//w.Header().Set("Content-Type", "application/x-msdownload")
@@ -170,16 +263,8 @@ func main() {
 	}
 	fmt.Println(string(b))
 
-	var finfo ImageInfo
-	finfo = ImageInfo{Filename: "feee", Md5: "33444"}
-	f, err := json.Marshal(finfo)
-	if err != nil {
-		fmt.Println("json err:", err)
-	}
-	fmt.Println(string(f))
-
 	ssdbclient = redis.NewClient(&redis.Options{
-		Addr:     "192.168.21.222:8888",
+		Addr:     "192.168.21.225:8888",
 		Password: "",
 		DB:       0,
 	})
