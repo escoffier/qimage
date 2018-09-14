@@ -17,6 +17,8 @@ import (
 
 	"github.com/go-redis/redis"
 	"github.com/julienschmidt/httprouter"
+	"gopkg.in/gographics/imagick.v1/imagick"
+	"gopkg.in/yaml.v2"
 )
 
 var ssdbclient *redis.Client
@@ -29,6 +31,11 @@ type ImageInfo struct {
 	Md5 string
 }
 
+type uploadresonse struct {
+	Ret   string
+	Files []ImageInfo
+}
+
 //Server test
 type Server struct {
 	ServerName string
@@ -38,6 +45,11 @@ type Server struct {
 //Serverslice slice
 type Serverslice struct {
 	Servers []Server
+}
+
+type conf struct {
+	IP   string `yaml:"ip"`
+	Port string `yaml:"port"`
 }
 
 func index(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
@@ -71,25 +83,6 @@ func adduser(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 
 func savaImage(buf []byte, MD5String string) {
 
-	//buf, err := ioutil.ReadAll(file)
-
-	//hash := md5.New()
-	//Copy the file in the hash interface and check for any error
-	// if _, err := io.Copy(hash, file); err != nil {
-	// 	//return returnMD5String, err
-	// 	fmt.Printf("copy to hash err: %v", err)
-	// }
-	//hash.Write(buf)
-	//hashInBytes := hash.Sum(nil)[:16]
-	//MD5String := hex.EncodeToString(hashInBytes)
-	//fmt.Println(MD5String)
-
-	//leveldir := md5[:6]
-	//level2dir := md5[3:6]
-	//hex.Encode()
-	//str := hex.EncodeToString(leveldir)
-
-	//buf := bytes.NewReader(level1dir)
 	l1int, err := strconv.ParseUint(MD5String[0:3], 16, 32)
 	if err != nil {
 		fmt.Println(err)
@@ -107,6 +100,15 @@ func savaImage(buf []byte, MD5String string) {
 	saveName := "image/" + le1str + "/" + l2str + "/" + MD5String + "/"
 	fmt.Println(saveName)
 
+	//图片已经存在
+	dir, err := os.Stat(saveName)
+	if err == nil {
+		if dir.IsDir() {
+			fmt.Printf("image %s already existed\n", saveName)
+			return
+		}
+	}
+
 	os.MkdirAll(saveName, 0777)
 
 	f, err := os.OpenFile(saveName+"0_0", os.O_WRONLY|os.O_CREATE, 0666) // 此处假设当前目录下已存在test目录
@@ -116,48 +118,53 @@ func savaImage(buf []byte, MD5String string) {
 	}
 	defer f.Close()
 
-	//var buff bytes.Buffer
-	//fileSize, err := buff.ReadFrom(file)
 	ssdbclient.Set(MD5String, buf, 0)
 	f.Write(buf)
-	//io.w(f, file)
 
 }
 func uploadpost(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 	r.ParseMultipartForm(32 << 20)
-	file, handler, err := r.FormFile("uploadfile")
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
-	defer file.Close()
-
-	// f, err := os.OpenFile("./test/"+handler.Filename, os.O_WRONLY|os.O_CREATE, 0666) // 此处假设当前目录下已存在test目录
+	//file, handler, err := r.FormFile("uploadfile")
 	// if err != nil {
 	// 	fmt.Println(err)
 	// 	return
 	// }
+	// defer file.Close()
+	var resp uploadresonse
+	files := r.MultipartForm.File["uploadfile"]
+	for _, v := range files {
+		file, err := v.Open()
 
-	// defer f.Close()
-	//fileSize, err := buff.ReadFrom(file)
-	buf, err := ioutil.ReadAll(file)
+		if err != nil {
+			fmt.Println("Open MultipartForm file failed")
+			continue
+		}
+		defer file.Close()
+		buf, err := ioutil.ReadAll(file)
 
-	hash := md5.New()
-	//Copy the file in the hash interface and check for any error
-	// if _, err := io.Copy(hash, file); err != nil {
-	// 	//return returnMD5String, err
-	// 	fmt.Printf("copy to hash err: %v", err)
-	// }
-	hash.Write(buf)
-	hashInBytes := hash.Sum(nil)[:16]
-	MD5String := hex.EncodeToString(hashInBytes)
-	fmt.Println(MD5String)
-	savaImage(buf, MD5String)
+		hash := md5.New()
+		//Copy the file in the hash interface and check for any error
+		// if _, err := io.Copy(hash, file); err != nil {
+		// 	//return returnMD5String, err
+		// 	fmt.Printf("copy to hash err: %v", err)
+		// }
+		hash.Write(buf)
+		hashInBytes := hash.Sum(nil)[:16]
+		MD5String := hex.EncodeToString(hashInBytes)
+		fmt.Println(MD5String)
+
+		savaImage(buf, MD5String)
+
+		fileinfo := ImageInfo{v.Filename, MD5String}
+		resp.Files = append(resp.Files, fileinfo)
+
+	}
 
 	//ssdbclient.Set(MD5String, buf, 0)
 	w.Header().Set("Content-type", "application/json;charset=utf-8")
-	fileinfo := ImageInfo{handler.Filename, MD5String}
-	b, err := json.Marshal(fileinfo)
+	resp.Ret = "true"
+	//b, err := json.Marshal(fileinfo)
+	b, err := json.Marshal(resp)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -165,11 +172,6 @@ func uploadpost(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 	//fmt.Fprintf(w, "%v", handler.Header)
 	fmt.Println(string(b))
 	w.Write(b)
-
-	//if _, err = file.Seek(0, 0); err != nil {
-	//	fmt.Println(err)
-	//}
-	//io.Copy(f, file)
 }
 
 func uploadget(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
@@ -207,7 +209,45 @@ func getImagePath(MD5String string) (string, error) {
 	dirpath := "image/" + le1str + "/" + l2str + "/" + MD5String + "/0_0"
 	return dirpath, nil
 }
-func downloadimage(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
+
+func processImage(path string) []byte {
+
+	mw := imagick.NewMagickWand()
+	defer mw.Destroy()
+	err := mw.ReadImage(path)
+
+	if err != nil {
+		//fmt.Printf("Error with id %s: %v", md5str, err)
+		// wr.WriteHeader(404)
+		// wr.Write([]byte("404"))
+		return nil
+	}
+
+	w := mw.GetImageWidth()
+	h := mw.GetImageHeight()
+
+	hWidth := uint(w / 2)
+	hHeight := uint(h / 2)
+
+	err = mw.ResizeImage(hWidth, hHeight, imagick.FILTER_LANCZOS, 1)
+	if err != nil {
+		// wr.WriteHeader(404)
+		// wr.Write([]byte("404"))
+		return nil
+	}
+
+	err = mw.SetImageCompressionQuality(95)
+	if err != nil {
+		// wr.WriteHeader(404)
+		// wr.Write([]byte("404"))
+		return nil
+	}
+
+	buf := mw.GetImageBlob()
+	return buf
+}
+
+func downloadImage(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 	md5str := ps.ByName("name")
 	fmt.Println(md5str)
 
@@ -222,9 +262,14 @@ func downloadimage(w http.ResponseWriter, r *http.Request, ps httprouter.Params)
 		return
 	}
 	fmt.Println("Image path: " + path)
-	data, err := ioutil.ReadFile(path)
 
-	if err != nil {
+	//data, err := ioutil.ReadFile(path)
+	bg := time.Now().UnixNano()
+	data := processImage(path)
+	end := time.Now().UnixNano()
+	fmt.Println("-------Spend time: ", (end-bg)/1e6)
+	if len(data) == 0 {
+		//if err != nil {
 		fmt.Printf("Error with id %s: %v", md5str, err)
 		w.WriteHeader(404)
 		w.Write([]byte("404"))
@@ -234,19 +279,19 @@ func downloadimage(w http.ResponseWriter, r *http.Request, ps httprouter.Params)
 	//w.Header().Set("Content-Type", "application/x-msdownload")
 	//w.Header().Set("Content-Type", "image/jpeg")
 	//fmt.Println(w.Header()["Content-Type"])
-	w.Header().Set("Content-Disposition", "attachment;filename=888.jpg")
+	fileName := md5str + ".jpg"
+	w.Header().Set("Content-Disposition", "attachment;filename="+fileName)
 	w.Header().Add("Content-Type", "application/x-msdownload")
 	fmt.Println(w.Header()["Content-Type"])
 
 	w.Write(data)
-	//http.ServeFile(w, r, "test/11.jpg")
 }
 
 func main() {
 	router := httprouter.New()
 	router.GET("/", index)
 	router.GET("/hello/:name", hello)
-	router.GET("/image/:name", downloadimage)
+	router.GET("/image/:name", downloadImage)
 
 	router.GET("/user/:uid", getuser)
 	router.GET("/upload", uploadget)
@@ -254,22 +299,40 @@ func main() {
 	router.POST("/upload", uploadpost)
 	router.DELETE("/deluser/:uid", deleteuser)
 	router.PUT("/moduser/:uid", modifyuser)
-	var s Serverslice
-	s.Servers = append(s.Servers, Server{ServerName: "Shanghai_VPN", ServerIP: "127.0.0.1"})
-	s.Servers = append(s.Servers, Server{ServerName: "Beijing_VPN", ServerIP: "127.0.0.2"})
-	b, err := json.Marshal(s)
-	if err != nil {
-		fmt.Println("json err:", err)
-	}
-	fmt.Println(string(b))
+
+	// var s Serverslice
+	// s.Servers = append(s.Servers, Server{ServerName: "Shanghai_VPN", ServerIP: "127.0.0.1"})
+	// s.Servers = append(s.Servers, Server{ServerName: "Beijing_VPN", ServerIP: "127.0.0.2"})
+	// b, err := json.Marshal(s)
+	// if err != nil {
+	// 	fmt.Println("json err:", err)
+	// }
+	// fmt.Println(string(b))
 
 	ssdbclient = redis.NewClient(&redis.Options{
-		Addr:     "192.168.21.225:8888",
+		Addr:     "192.168.21.238:6379",
 		Password: "",
 		DB:       0,
 	})
 	pong, err := ssdbclient.Ping().Result()
 	fmt.Println(pong, err)
 
-	log.Fatal(http.ListenAndServe(":8080", router))
+	yamlFile, err := ioutil.ReadFile("conf.yaml")
+	if err != nil {
+		log.Printf("yamlFile.Get err   #%v ", err)
+		return
+	}
+
+	var c conf
+	err = yaml.Unmarshal(yamlFile, &c)
+	if err != nil {
+		log.Printf("Unmarshal conf err   #%v ", err)
+		return
+	}
+	fmt.Printf("--- c:\n%v\n\n", c)
+
+	imagick.Initialize()
+	defer imagick.Terminate()
+
+	log.Fatal(http.ListenAndServe(":4869", router))
 }
